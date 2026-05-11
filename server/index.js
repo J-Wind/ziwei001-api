@@ -20,37 +20,7 @@ app.use(cors({
 app.use(express.json())
 app.use('/avatars', express.static(path.join(__dirname, '../public/avatars')))
 
-const captchaStore = new Map()
 
-function generateCaptchaToken() {
-  return crypto.randomBytes(16).toString('hex')
-}
-
-app.get('/api/captcha/generate', (req, res) => {
-  const token = generateCaptchaToken()
-  const code = generateCode(4)
-  captchaStore.set(token, { code, expires: Date.now() + 5 * 60 * 1000 })
-  setTimeout(() => captchaStore.delete(token), 5 * 60 * 1000)
-  res.json({ token, code })
-})
-
-app.post('/api/captcha/verify', (req, res) => {
-  const { token, code } = req.body
-  if (!token || !code) {
-    return res.status(400).json({ error: '参数错误' })
-  }
-  const entry = captchaStore.get(token)
-  if (!entry) {
-    return res.status(400).json({ error: '验证码已过期' })
-  }
-  if (entry.expires < Date.now()) {
-    captchaStore.delete(token)
-    return res.status(400).json({ error: '验证码已过期' })
-  }
-  const valid = entry.code.toUpperCase() === code.toUpperCase()
-  captchaStore.delete(token)
-  res.json({ valid })
-})
 
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() })
@@ -357,7 +327,7 @@ app.put('/api/admin/recharge/config', adminRequired, (req, res) => {
 // ============================================================
 
 app.post('/api/auth/register', (req, res) => {
-  const { phone, password, invite_code, captcha_token, captcha_code } = req.body
+  const { phone, password, invite_code } = req.body
   if (!phone || !password) {
     return res.status(400).json({ error: '手机号和密码不能为空' })
   }
@@ -367,40 +337,6 @@ app.post('/api/auth/register', (req, res) => {
   }
   if (password.length < 6) {
     return res.status(400).json({ error: '密码至少 6 个字符' })
-  }
-
-  if (!captcha_token) {
-    return res.status(400).json({ error: '请完成验证码' })
-  }
-  
-  let captchaValid = false
-  if (captcha_token.startsWith('local_')) {
-    const parts = captcha_token.split('_')
-    if (parts.length === 3) {
-      const serverAnswer = parseInt(parts[2])
-      const clientAnswer = parseInt(captcha_code)
-      const timestamp = parseInt(parts[1])
-      const fiveMinutesAgo = Date.now() - 5 * 60 * 1000
-      if (!isNaN(serverAnswer) && !isNaN(clientAnswer) && serverAnswer === clientAnswer && timestamp > fiveMinutesAgo) {
-        captchaValid = true
-      }
-    }
-  } else {
-    const captchaEntry = captchaStore.get(captcha_token)
-    if (!captchaEntry || captchaEntry.expires < Date.now()) {
-      captchaStore.delete(captcha_token)
-      return res.status(400).json({ error: '验证码已过期' })
-    }
-    if (!captcha_code || parseInt(captcha_code) !== captchaEntry.answer) {
-      captchaStore.delete(captcha_token)
-      return res.status(400).json({ error: '请输入正确的验证码' })
-    }
-    captchaStore.delete(captcha_token)
-    captchaValid = true
-  }
-  
-  if (!captchaValid) {
-    return res.status(400).json({ error: '验证码已过期' })
   }
 
   const db = getDb()
