@@ -1,0 +1,16 @@
+name: ziwei-api
+
+services:
+  - name: api
+    type: dockerfile
+    dockerfilePath: Dockerfile
+    buildCommand: npm install --production
+    env:
+      - key: PORT
+        value: "3001"
+      - key: DEFAULT_PROVIDER
+        value: deepseek
+      - key: NODE_ENV
+        value: production
+    ports:
+      - 3001

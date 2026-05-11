@@ -1,0 +1,22 @@
+name: Deploy to Zeabur
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Zeabur CLI
+        run: |
+          curl -sL https://cli.zeabur.com/install.sh | bash
+
+      - name: Deploy to Zeabur
+        run: |
+          zeabur deploy --token ${{ secrets.ZEABUR_API_TOKEN }}

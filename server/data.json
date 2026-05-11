@@ -1,0 +1,45 @@
+{
+  "apiKeys": [
+    {
+      "id": "1",
+      "model": "Kimi",
+      "provider": "kimi",
+      "apiKey": "your-kimi-api-key-here",
+      "isActive": false,
+      "createdAt": "2026-04-24T17:25:24.424Z",
+      "updatedAt": "2026-04-24T17:25:24.426Z"
+    },
+    {
+      "id": "2",
+      "model": "Gemini",
+      "provider": "gemini",
+      "apiKey": "your-gemini-api-key-here",
+      "isActive": false,
+      "createdAt": "2026-04-24T17:25:24.426Z",
+      "updatedAt": "2026-04-24T17:25:24.426Z"
+    },
+    {
+      "id": "3",
+      "model": "Claude",
+      "provider": "claude",
+      "apiKey": "your-claude-api-key-here",
+      "isActive": false,
+      "createdAt": "2026-04-24T17:25:24.426Z",
+      "updatedAt": "2026-04-24T17:25:24.426Z"
+    },
+    {
+      "id": "4",
+      "model": "DeepSeek",
+      "provider": "deepseek",
+      "apiKey": "sk-dd83e995f05f4eb9a40a2aeab60bebab",
+      "isActive": true,
+      "createdAt": "2026-04-24T17:25:24.426Z",
+      "updatedAt": "2026-04-24T17:25:24.426Z"
+    }
+  ],
+  "systemConfig": {
+    "defaultProvider": "deepseek",
+    "enableWebSearch": false,
+    "enableThinking": false
+  }
+}
