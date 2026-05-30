@@ -923,20 +923,29 @@ app.post('/api/ai/chat', authRequired, async (req, res) => {
       return res.status(402).json({ error: '积分不足', required: cost })
     }
 
-    const apiKeyEntry = db.prepare('SELECT * FROM api_keys WHERE provider = ? AND isActive = 1').get(provider)
-    let apiKey = apiKeyEntry?.apiKey
+    let apiKey
+    const envKeyMap = { kimi: 'KIMI_API_KEY', gemini: 'GEMINI_API_KEY', claude: 'CLAUDE_API_KEY', deepseek: 'DEEPSEEK_API_KEY' }
+    const envVal = process.env[envKeyMap[provider]] || ''
 
-    if (!apiKey) {
-      switch (provider) {
-        case 'kimi': apiKey = process.env.KIMI_API_KEY; break
-        case 'gemini': apiKey = process.env.GEMINI_API_KEY; break
-        case 'claude': apiKey = process.env.CLAUDE_API_KEY; break
-        case 'deepseek': apiKey = process.env.DEEPSEEK_API_KEY; break
-        default: return res.status(400).json({ error: 'Invalid provider' })
+    if (envVal && !envVal.includes('your-') && !envVal.includes('xxxxxxxx')) {
+      apiKey = envVal
+    } else {
+      const db = getDb()
+      const apiKeyEntry = db.prepare('SELECT * FROM api_keys WHERE provider = ? AND isActive = 1').get(provider)
+      apiKey = apiKeyEntry?.apiKey
+      if (!apiKey) {
+        switch (provider) {
+          case 'kimi': apiKey = process.env.KIMI_API_KEY; break
+          case 'gemini': apiKey = process.env.GEMINI_API_KEY; break
+          case 'claude': apiKey = process.env.CLAUDE_API_KEY; break
+          case 'deepseek': apiKey = process.env.DEEPSEEK_API_KEY; break
+          default: return res.status(400).json({ error: 'Invalid provider' })
+        }
       }
     }
 
     if (!apiKey || apiKey.includes('your-') || apiKey.includes('xxxxxxxx')) {
+      const db = getDb()
       db.prepare('UPDATE users SET points = points + ?, updated_at = datetime(\'now\') WHERE id = ?').run(cost, req.user.id)
       db.prepare('INSERT INTO points_log (user_id, amount, type, description) VALUES (?, ?, ?, ?)').run(req.user.id, cost, 'refund', `AI调用失败，退还积分`)
       return res.status(500).json({ error: `API key not configured for ${provider}` })

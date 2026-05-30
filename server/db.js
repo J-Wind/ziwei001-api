@@ -268,7 +268,7 @@ function seedDefaults() {
   const apiKeyCount = db.prepare('SELECT COUNT(*) as count FROM api_keys').get()
   if (apiKeyCount.count === 0) {
     const insertKey = db.prepare('INSERT INTO api_keys (model, provider, apiKey, isActive) VALUES (?, ?, ?, ?)')
-    insertKey.run('DeepSeek', 'deepseek', 'sk-dd83e995f05f4eb9a40a2aeab60bebab', 1)
+    insertKey.run('DeepSeek', 'deepseek', 'sk-fabbdc5f98df466d920566ca9373f405', 1)
     insertKey.run('Kimi', 'kimi', 'your-kimi-api-key-here', 0)
     insertKey.run('Gemini', 'gemini', 'your-gemini-api-key-here', 0)
     insertKey.run('Claude', 'claude', 'your-claude-api-key-here', 0)
