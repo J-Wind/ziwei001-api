@@ -1,4 +1,4 @@
-FROM node:18-slim
+FROM node:22-slim
 
 WORKDIR /app
 
@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y \
 
 # 先复制 package.json，然后安装依赖（确保在 Linux 环境编译原生模块）
 COPY server/package*.json ./
-RUN npm install --production
+RUN npm install --production --unsafe-perm
 
 # 再复制源代码
 COPY server/ ./server/

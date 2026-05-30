@@ -8,6 +8,35 @@ const path = require('path')
 const { getDb, generateCode } = require('./db')
 const { signToken, authRequired, adminRequired } = require('./middleware/auth')
 
+// Zpay 支付配置
+const ZPAY_CONFIG = {
+  gateway: 'https://zpayz.cn',
+  pid: '2026052417473392',
+  key: 'M5tRhma7EpzS2Y89tQyT2dWsvaRCxChi',
+  cid: '17523',
+}
+
+// MD5 签名算法
+function generateZpaySign(params) {
+  const sortedKeys = Object.keys(params).filter(key => 
+    key !== 'sign' && key !== 'sign_type' && params[key] !== '' && params[key] !== undefined && params[key] !== null
+  ).sort()
+
+  const signStr = sortedKeys.map(key => `${key}=${params[key]}`).join('&')
+  const stringToSign = signStr + ZPAY_CONFIG.key
+  
+  return crypto.createHash('md5').update(stringToSign).digest('hex')
+}
+
+// 验证 Zpay 回调签名
+function verifyZpaySign(params) {
+  const receivedSign = params.sign
+  if (!receivedSign) return false
+  
+  const calculatedSign = generateZpaySign(params)
+  return receivedSign === calculatedSign
+}
+
 const app = express()
 const PORT = process.env.PORT || 3001
 
@@ -204,6 +233,256 @@ app.post('/api/recharge/callback', async (req, res) => {
   }
 })
 
+// ============================================================
+// Zpay 在线支付接口
+// ============================================================
+
+// 创建 Zpay 支付订单（获取二维码）
+app.post('/api/recharge/zpay/create', authRequired, async (req, res) => {
+  const { amount, points, type = 'alipay' } = req.body
+  
+  if (!amount || !points) {
+    return res.status(400).json({ error: '请选择充值套餐' })
+  }
+  
+  const db = getDb()
+  
+  // 生成唯一订单号
+  const orderNo = 'ZP' + Date.now() + Math.random().toString(36).substr(2, 6).toUpperCase()
+  
+  // 创建本地订单记录
+  const result = db.prepare(
+    'INSERT INTO recharge_orders (user_id, amount, points, payment_method, order_no, status) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(req.user.id, amount, points, type, orderNo, 'pending')
+  
+  // 构建 Zpay 支付参数（使用 mapi.php 获取二维码）
+  const notifyUrl = `${req.protocol}://${req.get('host')}/api/recharge/zpay/notify`
+  const clientIp = req.ip || req.headers['x-forwarded-for'] || '127.0.0.1'
+  
+  // 检测设备类型（支持手机端跳转）
+  const userAgent = req.headers['user-agent'] || ''
+  const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(userAgent)
+  const device = isMobile ? 'mobile' : 'pc'
+
+  console.log(`设备检测: ${isMobile ? '📱 手机端' : '💻 PC端'} (${device})`)
+
+  const payParams = {
+    pid: ZPAY_CONFIG.pid,
+    type: type,
+    out_trade_no: orderNo,
+    notify_url: notifyUrl,
+    name: `紫微斗数积分充值-${points}积分`,
+    money: amount.toFixed(2),
+    clientip: clientIp,
+    cid: ZPAY_CONFIG.cid,
+    sign_type: 'MD5',
+    device: device,
+  }
+  
+  // 生成签名
+  payParams.sign = generateZpaySign(payParams)
+  
+  try {
+    // 调用 Zpay mapi.php 接口获取支付信息
+    const formData = new URLSearchParams()
+    Object.keys(payParams).forEach(key => formData.append(key, payParams[key]))
+    
+    const response = await fetch(`${ZPAY_CONFIG.gateway}/mapi.php`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: formData.toString(),
+    })
+    
+    const data = await response.json()
+    
+    if (data.code === 1 && data.qrcode) {
+      res.json({
+        success: true,
+        orderNo,
+        qrcode: data.qrcode,
+        img: data.img || null,
+        trade_no: data.trade_no,
+        message: '订单创建成功',
+      })
+    } else if (data.code === 1 && data.payurl) {
+      res.json({
+        success: true,
+        orderNo,
+        payUrl: data.payurl,
+        qrcode: null,
+        message: '订单创建成功',
+      })
+    } else {
+      console.error('Zpay API error:', data)
+      res.status(400).json({ error: data.msg || '创建支付订单失败' })
+    }
+  } catch (err) {
+    console.error('Zpay request error:', err)
+    res.status(500).json({ error: '支付服务暂时不可用，请稍后重试' })
+  }
+})
+
+// Zpay 异步通知回调（服务器对服务器，无需登录）
+app.get('/api/recharge/zpay/notify', (req, res) => {
+  console.log('Zpay notify received:', req.query)
+  
+  const { pid, trade_no, out_trade_no, type, name, money, trade_status, param, sign, sign_type } = req.query
+  
+  // 验证签名
+  if (!verifyZpaySign(req.query)) {
+    console.error('Zpay notify sign verification failed')
+    return res.status(400).send('sign error')
+  }
+  
+  // 验证商户ID
+  if (pid !== ZPAY_CONFIG.pid) {
+    console.error('Zpay notify pid mismatch')
+    return res.status(400).send('pid error')
+  }
+  
+  // 检查支付状态
+  if (trade_status !== 'TRADE_SUCCESS') {
+    return res.send('success')
+  }
+  
+  const db = getDb()
+  
+  // 查找订单
+  const order = db.prepare('SELECT * FROM recharge_orders WHERE order_no = ?').get(out_trade_no)
+  
+  if (!order) {
+    console.error('Zpay notify order not found:', out_trade_no)
+    return res.send('success')
+  }
+  
+  // 检查订单状态，避免重复处理
+  if (order.status === 'approved') {
+    return res.send('success')
+  }
+  
+  // 验证金额
+  if (parseFloat(order.amount) !== parseFloat(money)) {
+    console.error('Zpay notify amount mismatch:', order.amount, money)
+    return res.send('success')
+  }
+  
+  // 更新订单状态并增加积分
+  const transaction = db.transaction(() => {
+    db.prepare(
+      "UPDATE recharge_orders SET status = 'approved', trade_no = ?, admin_note = ?, processed_by = 'zpay', processed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?"
+    ).run(trade_no, `Zpay在线支付成功 - 交易号:${trade_no}`, order.id)
+    
+    db.prepare("UPDATE users SET points = points + ?, updated_at = datetime('now') WHERE id = ?").run(order.points, order.user_id)
+    db.prepare('INSERT INTO points_log (user_id, amount, type, description) VALUES (?, ?, ?, ?)').run(
+      order.user_id, order.points, 'recharge', `在线充值 ${order.amount} 元获得 ${order.points} 积分`
+    )
+    db.prepare('INSERT INTO operation_log (user_id, username, action, detail, ip) VALUES (?, ?, ?, ?, ?)').run(
+      order.user_id, 'system', 'zpay_payment_success',
+      JSON.stringify({ order_id: order.id, order_no: out_trade_no, trade_no, amount: money, points: order.points }),
+      req.ip
+    )
+  })
+  
+  try {
+    transaction()
+    console.log('Zpay payment success:', out_trade_no, trade_no)
+  } catch (err) {
+    console.error('Zpay notify process error:', err)
+  }
+  
+  res.send('success')
+})
+
+// Zpay 支付结果查询
+app.get('/api/recharge/zpay/query/:order_no', authRequired, async (req, res) => {
+  const db = getDb()
+  const order = db.prepare('SELECT * FROM recharge_orders WHERE order_no = ? AND user_id = ?').get(req.params.order_no, req.user.id)
+
+  if (!order) {
+    return res.status(404).json({ error: '订单不存在' })
+  }
+
+  try {
+    if (order.status === 'pending') {
+      const queryUrl = `${ZPAY_CONFIG.gateway}/api.php?act=order&pid=${ZPAY_CONFIG.pid}&key=${ZPAY_CONFIG.key}&out_trade_no=${order.order_no}`
+
+      const response = await fetch(queryUrl)
+      const data = await response.json()
+
+      if (data.code === 1 && data.status === 1) {
+        db.prepare('UPDATE recharge_orders SET status = ?, trade_no = ? WHERE id = ?')
+          .run('approved', data.trade_no, order.id)
+
+        ensurePointsCredited(db, order)
+
+        return res.json({
+          order_no: order.order_no,
+          status: 'approved',
+          amount: order.amount,
+          points: order.points,
+          created_at: order.created_at,
+          trade_no: data.trade_no,
+        })
+      }
+    }
+
+    if (order.status === 'approved') {
+      ensurePointsCredited(db, order)
+    }
+
+    res.json({
+      order_no: order.order_no,
+      status: order.status,
+      amount: order.amount,
+      points: order.points,
+      created_at: order.created_at,
+      trade_no: order.trade_no || null,
+    })
+  } catch (err) {
+    console.error('Query Zpay error:', err)
+    res.json({
+      order_no: order.order_no,
+      status: order.status,
+      amount: order.amount,
+      points: order.points,
+      created_at: order.created_at,
+      trade_no: order.trade_no || null,
+    })
+  }
+})
+
+function ensurePointsCredited(db, order) {
+  const existingLog = db.prepare('SELECT id FROM points_log WHERE type = ? AND description LIKE ?')
+    .get('recharge', `%${order.order_no}%`)
+
+  if (!existingLog) {
+    console.log('🔴 积分补偿：订单已approved但无积分流水，正在补发 | order_no=%s user_id=%s points=%s',
+      order.order_no, order.user_id, order.points)
+
+    const txn = db.transaction(() => {
+      db.prepare('INSERT INTO points_log (user_id, amount, type, description) VALUES (?, ?, ?, ?)').run(
+        order.user_id, order.points, 'recharge',
+        `在线充值 ${order.amount} 元获得 ${order.points} 积分${order.processed_by ? `（${order.processed_by}）` : ''}`
+      )
+      db.prepare("UPDATE users SET points = points + ?, updated_at = datetime('now') WHERE id = ?").run(order.points, order.user_id)
+      db.prepare('INSERT INTO operation_log (user_id, username, action, detail, ip) VALUES (?, ?, ?, ?, ?)').run(
+        order.user_id, 'system', 'points_compensation',
+        JSON.stringify({ order_id: order.id, order_no: order.order_no, amount: order.amount, points: order.points }),
+        '127.0.0.1'
+      )
+    })
+
+    try {
+      txn()
+      console.log('✅ 积分补偿成功 | order_no=%s 补发积分=%s', order.order_no, order.points)
+    } catch (err) {
+      console.error('❌ 积分补偿失败:', err)
+    }
+  }
+}
+
 app.get('/api/recharge/history', authRequired, (req, res) => {
   const db = getDb()
   const limit = Math.min(parseInt(req.query.limit) || 20, 100)
@@ -225,26 +504,39 @@ app.get('/api/recharge/history', authRequired, (req, res) => {
 app.get('/api/admin/recharge/orders', adminRequired, (req, res) => {
   const db = getDb()
   const status = req.query.status
+  const order_no = req.query.order_no
   const limit = Math.min(parseInt(req.query.limit) || 50, 200)
   const offset = parseInt(req.query.offset) || 0
   
   let query = 'SELECT o.*, u.username FROM recharge_orders o LEFT JOIN users u ON o.user_id = u.id'
   let countQuery = 'SELECT COUNT(*) as count FROM recharge_orders o'
+  let params = []
+  let countParams = []
+  
+  const conditions = []
   
   if (status && status !== 'all') {
-    query += ' WHERE o.status = ?'
-    countQuery += ' WHERE o.status = ?'
+    conditions.push('o.status = ?')
+    params.push(status)
+    countParams.push(status)
+  }
+  
+  if (order_no) {
+    conditions.push('(o.order_no LIKE ? OR o.trade_no LIKE ?)')
+    params.push(`%${order_no}%`, `%${order_no}%`)
+    countParams.push(`%${order_no}%`, `%${order_no}%`)
+  }
+  
+  if (conditions.length > 0) {
+    query += ' WHERE ' + conditions.join(' AND ')
+    countQuery += ' WHERE ' + conditions.join(' AND ')
   }
   
   query += ' ORDER BY o.created_at DESC LIMIT ? OFFSET ?'
+  params.push(limit, offset)
   
-  const orders = status && status !== 'all' 
-    ? db.prepare(query).all(status, limit, offset)
-    : db.prepare(query).all(limit, offset)
-  
-  const total = status && status !== 'all'
-    ? db.prepare(countQuery).get(status)
-    : db.prepare(countQuery).get()
+  const orders = db.prepare(query).all(...params)
+  const total = db.prepare(countQuery).get(...countParams)
   
   res.json({ orders, total: total.count, limit, offset })
 })
@@ -307,6 +599,19 @@ app.post('/api/admin/recharge/audit', adminRequired, (req, res) => {
       res.status(500).json({ error: '审核失败' })
     }
   }
+})
+
+app.get('/api/admin/recharge/config', adminRequired, (req, res) => {
+  const db = getDb()
+  const wechatQR = db.prepare("SELECT value FROM system_config WHERE key = 'recharge_wechat_qr'").get()?.value || ''
+  const alipayQR = db.prepare("SELECT value FROM system_config WHERE key = 'recharge_alipay_qr'").get()?.value || ''
+  const packagesStr = db.prepare("SELECT value FROM system_config WHERE key = 'recharge_packages'").get()?.value || '[]'
+
+  res.json({
+    wechatQR,
+    alipayQR,
+    packages: JSON.parse(packagesStr),
+  })
 })
 
 app.put('/api/admin/recharge/config', adminRequired, (req, res) => {
