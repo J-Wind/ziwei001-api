@@ -254,10 +254,10 @@ function seedDefaults() {
     { key: 'recharge_wechat_qr', value: '' },
     { key: 'recharge_alipay_qr', value: '' },
     { key: 'recharge_packages', value: JSON.stringify([
-      { amount: 9.9, points: 300, label: '限时活动', bonus: 0, limited: true, original_price: 19.9 },
-      { amount: 29.9, points: 600, label: '500+赠送100积分', bonus: 100 },
-      { amount: 100, points: 2000, label: '推荐包', bonus: 0 },
-      { amount: 200, points: 4800, label: '豪华包', bonus: 0 },
+      { amount: 3.99, points: 1000, label: '体验包', bonus: 0, limited: true, original_price: 9.9 },
+      { amount: 29.9, points: 2000, label: '超值包', bonus: 1000, limited: false, original_price: null },
+      { amount: 99, points: 5000, label: '推荐包', bonus: 3000, limited: false, original_price: null },
+      { amount: 199, points: 10000, label: '豪华包', bonus: 6000, limited: false, original_price: null },
     ]) },
   ]
   const insertSys = db.prepare('INSERT OR IGNORE INTO system_config (key, value) VALUES (?, ?)')
