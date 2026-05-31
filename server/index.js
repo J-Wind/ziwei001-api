@@ -505,40 +505,85 @@ app.get('/api/admin/recharge/orders', adminRequired, (req, res) => {
   const db = getDb()
   const status = req.query.status
   const order_no = req.query.order_no
+  const user_id = req.query.user_id
+  const start_date = req.query.start_date
+  const end_date = req.query.end_date
   const limit = Math.min(parseInt(req.query.limit) || 50, 200)
   const offset = parseInt(req.query.offset) || 0
-  
+
   let query = 'SELECT o.*, u.username FROM recharge_orders o LEFT JOIN users u ON o.user_id = u.id'
   let countQuery = 'SELECT COUNT(*) as count FROM recharge_orders o'
   let params = []
   let countParams = []
-  
+
   const conditions = []
-  
+
   if (status && status !== 'all') {
     conditions.push('o.status = ?')
     params.push(status)
     countParams.push(status)
   }
-  
+
   if (order_no) {
     conditions.push('(o.order_no LIKE ? OR o.trade_no LIKE ?)')
     params.push(`%${order_no}%`, `%${order_no}%`)
     countParams.push(`%${order_no}%`, `%${order_no}%`)
   }
-  
+
+  if (user_id) {
+    conditions.push('o.user_id = ?')
+    params.push(parseInt(user_id))
+    countParams.push(parseInt(user_id))
+  }
+
+  if (start_date) {
+    conditions.push('o.created_at >= ?')
+    params.push(start_date + ' 00:00:00')
+    countParams.push(start_date + ' 00:00:00')
+  }
+
+  if (end_date) {
+    conditions.push('o.created_at <= ?')
+    params.push(end_date + ' 23:59:59')
+    countParams.push(end_date + ' 23:59:59')
+  }
+
   if (conditions.length > 0) {
     query += ' WHERE ' + conditions.join(' AND ')
     countQuery += ' WHERE ' + conditions.join(' AND ')
   }
-  
+
   query += ' ORDER BY o.created_at DESC LIMIT ? OFFSET ?'
   params.push(limit, offset)
-  
+
   const orders = db.prepare(query).all(...params)
   const total = db.prepare(countQuery).get(...countParams)
-  
-  res.json({ orders, total: total.count, limit, offset })
+
+  let amountSumQuery = 'SELECT COALESCE(SUM(amount), 0) as amount_sum FROM recharge_orders o WHERE o.status = \'approved\''
+  let amountSumParams = []
+
+  if (user_id) {
+    amountSumQuery += ' AND o.user_id = ?'
+    amountSumParams.push(parseInt(user_id))
+  }
+  if (start_date) {
+    amountSumQuery += ' AND o.created_at >= ?'
+    amountSumParams.push(start_date + ' 00:00:00')
+  }
+  if (end_date) {
+    amountSumQuery += ' AND o.created_at <= ?'
+    amountSumParams.push(end_date + ' 23:59:59')
+  }
+
+  const amountSumResult = db.prepare(amountSumQuery).get(...amountSumParams)
+
+  res.json({
+    orders,
+    total: total.count,
+    limit,
+    offset,
+    amountSum: amountSumResult?.amount_sum || 0,
+  })
 })
 
 app.post('/api/admin/recharge/audit', adminRequired, (req, res) => {
@@ -1323,7 +1368,7 @@ app.get('/api/admin/users/:id/detail', adminRequired, (req, res) => {
   const userId = parseInt(req.params.id)
 
   const user = db.prepare(`
-    SELECT id, username, email, avatar_url, role, points, status, created_at, updated_at, last_login_at
+    SELECT id, username, email, avatar_url, role, points, status, created_at, updated_at, last_login_at, total_recharge_amount
     FROM users WHERE id = ?
   `).get(userId)
   if (!user) return res.status(404).json({ error: '用户不存在' })
@@ -1336,6 +1381,11 @@ app.get('/api/admin/users/:id/detail', adminRequired, (req, res) => {
   const rechargeCount = db.prepare(`
     SELECT COUNT(*) as count, SUM(amount) as total
     FROM points_log WHERE user_id = ? AND amount > 0 AND type = 'redeem'
+  `).get(userId)
+
+  const rechargeOrderStats = db.prepare(`
+    SELECT COUNT(*) as order_count, COALESCE(SUM(amount), 0) as order_total_amount
+    FROM recharge_orders WHERE user_id = ? AND status = 'approved'
   `).get(userId)
 
   const recentLogs = db.prepare(`
@@ -1353,6 +1403,8 @@ app.get('/api/admin/users/:id/detail', adminRequired, (req, res) => {
       consumeTotal: consumeCount?.total || 0,
       rechargeCount: rechargeCount?.count || 0,
       rechargeTotal: rechargeCount?.total || 0,
+      rechargeOrderCount: rechargeOrderStats?.order_count || 0,
+      rechargeOrderTotalAmount: rechargeOrderStats?.order_total_amount || 0,
     },
     pointsLog: recentLogs,
     operationLog: recentOperations,

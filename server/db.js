@@ -54,6 +54,11 @@ function initTables() {
     db.exec('ALTER TABLE users ADD COLUMN display_name TEXT')
   }
 
+  const hasTotalRecharge = columns.some(c => c.name === 'total_recharge_amount')
+  if (!hasTotalRecharge) {
+    db.exec('ALTER TABLE users ADD COLUMN total_recharge_amount REAL DEFAULT 0')
+  }
+
   db.exec(`
 
     CREATE TABLE IF NOT EXISTS roles (
