@@ -13,10 +13,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Zeabur CLI
-        run: |
-          curl -sL https://cli.zeabur.com/install.sh | bash
-
       - name: Deploy to Zeabur
         run: |
-          zeabur deploy --token ${{ secrets.ZEABUR_API_TOKEN }}
+          npx zeabur@latest deploy --token ${{ secrets.ZEABUR_API_TOKEN }}
